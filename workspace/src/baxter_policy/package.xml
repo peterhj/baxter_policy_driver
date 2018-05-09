@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package>
+  <name>baxter_policy</name>
+  <version>0.0.0</version>
+  <description>baxter_policy</description>
+  <maintainer email="phj@eecs.berkeley.edu">Peter Jin</maintainer>
+  <license>TODO</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <export>
+  </export>
+</package>
