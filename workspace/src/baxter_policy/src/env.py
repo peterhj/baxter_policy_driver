@@ -6,10 +6,10 @@ import numpy as np
 import rospy
 
 class BaxterArmState(object):
-  def __init__(self, limb, step_freq, jointvel_action_clip):
+  def __init__(self, limb, step_freq, jointvel_clip):
     self.limb = limb
     self.step_freq = step_freq
-    self.jointvel_action_clip = jointvel_action_clip
+    self.jointvel_clip = jointvel_clip
 
     #self.prev_t = None
     #self.prev_theta = None
@@ -51,9 +51,9 @@ class BaxterArmState(object):
     joint_keys = self.limb.joint_names()
 
     if action is not None:
-      assert self.jointvel_action_clip is not None
-      assert self.jointvel_action_clip >= 0.0
-      ctrl_theta_dot = np.clip(action, -self.jointvel_action_clip, self.jointvel_action_clip)
+      assert self.jointvel_clip is not None
+      assert self.jointvel_clip >= 0.0
+      ctrl_theta_dot = np.clip(action, -self.jointvel_clip, self.jointvel_clip)
       self.limb.set_joint_velocities(flat2joint(ctrl_theta_dot, joint_keys))
 
   def step_down(self):
@@ -77,27 +77,55 @@ class BaxterArmState(object):
   def stop(self):
     self.limb.exit_control_mode()
 
+class Box(object):
+  def __init__(self, x_bounds, y_bounds, z_bounds):
+    self.x_bounds = np.array(x_bounds)
+    self.y_bounds = np.array(y_bounds)
+    self.z_bounds = np.array(z_bounds)
+
+  def center(self):
+    xc = np.mean(self.x_bounds)
+    yc = np.mean(self.y_bounds)
+    zc = np.mean(self.z_bounds)
+    return np.array([xc, yc, zc])
+
 class BaxterReachingEnv(object):
   def __init__(self, state):
     self.state = state
     self.step_freq = state.step_frequency()
     self.loop_rate = rospy.Rate(2.0 * self.step_freq)
-    self.tg_box = None
+    # TODO: these are specific to the right arm.
+    valid_x = [0.3, 0.65]
+    valid_y = [-0.75, -0.25]
+    valid_z = [0.25, 0.75]
+    self.valid_box = Box(valid_x, valid_y, valid_z)
+    # TODO: static target box for testing.
+    target_x = [0.425, 0.525]
+    target_y = [-0.55, -0.45]
+    target_z = [0.45, 0.55]
+    #self.tg_box = None
+    self.tg_box = Box(target_x, target_y, target_z)
+
+    self.prev_dist_to_tg = None
 
   def reset(self):
     # TODO: randomly initialize a target region.
     self.state.reset()
     obs = self.get_obs()
+    #self.prev_dist_to_tg = None
+    #self.prev_dist_to_tg = 0.0
+    self.prev_dist_to_tg = np.linalg.norm(self.state.curr_pos - self.tg_box.center())
     return obs
 
   def step(self, action):
     self.state.step_up(action)
     self.loop_rate.sleep()
     self.state.step_down()
-    # TODO: get obs, reward, etc.
     obs = self.get_obs()
-    res = 0.0
-    done = False
+    dist_to_tg = np.linalg.norm(self.state.curr_pos - self.tg_box.center())
+    res = (self.prev_dist_to_tg - dist_to_tg) * self.step_freq
+    done = dist_to_tg <= 0.05
+    self.prev_dist_to_tg = dist_to_tg
     return obs, res, done, None
 
   def sleep(self):
@@ -108,5 +136,5 @@ class BaxterReachingEnv(object):
 
   def get_obs(self):
     # TODO
-    obs = np.concatenate((self.state.curr_theta, self.state.curr_theta_dot, self.state.curr_pos), axis=0)
+    obs = np.concatenate((self.state.curr_theta, self.state.curr_theta_dot, self.state.curr_pos, self.tg_box.center()), axis=0)
     return obs
