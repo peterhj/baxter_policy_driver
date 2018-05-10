@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 
-import msgpack
-import msgpack_numpy
-msgpack_numpy.patch()
+#import msgpack
+#import msgpack_numpy
+#msgpack_numpy.patch()
+
+from env import *
+from models import *
+from utils import *
 
 import baxter_interface
-from gevent.server import StreamServer
-from mprpc import RPCServer
+#from gevent.server import StreamServer
+#from mprpc import RPCServer
 import numpy as np
 import rospy
 import torch
@@ -16,36 +20,48 @@ import signal
 import sys
 import time
 
-def pos2flat(v):
-  return np.array([v.x, v.y, v.z])
+if False:
+  class PolicyDriverServer(RPCServer):
+    def poll_transition(self):
+      # TODO
+      info = {
+          "obs": None,
+          "res": 0.0,
+          "init": False,
+          "done": False,
+      }
+      pass
 
-def joint2flat(d, keys):
-  arr = []
-  for key in keys:
-    arr.append(d[key])
-  return np.array(arr)
+    def post_transition(self, obs, res, init, done):
+      # TODO
+      print("DEBUG: driver server: post transition")
+      pass
 
-def flat2joint(arr, keys):
-  d = {}
-  for idx, key in enumerate(keys):
-    d[key] = arr[idx]
-  return d
+class RealtimeTrajectory(object):
+  def __init__(self):
+    self.init_obs = None
+    self.steps = []
 
-class PolicyDriverServer(RPCServer):
-  def poll_transition(self):
-    # TODO
-    info = {
-        "obs": None,
-        "res": 0.0,
-        "init": False,
-        "done": False,
-    }
-    pass
+  def reset(self):
+    self.init_obs = None
+    del self.steps[:]
 
-  def post_transition(self, obs, res, init, done):
-    # TODO
-    print("DEBUG: driver server: post transition")
-    pass
+  def rollout(self, env, policy, horizon=None):
+    self.reset()
+    obs = env.reset()
+    self.init_obs = obs
+    act = policy.execute(obs)
+    while True:
+      obs, res, done, _ = env.step(act)
+      print("DEBUG: step: pos:", obs[-3:])
+      self.steps.append((act, res, done, obs))
+      if done:
+        break
+      elif horizon is not None and len(self.steps) >= horizon:
+        break
+      act = policy.execute(obs)
+      env.sleep()
+    env.stop()
 
 class DummyPolicy(object):
   def __init__(self):
@@ -54,8 +70,17 @@ class DummyPolicy(object):
   def execute(self, obs):
     return None
 
+class RandomNormalPolicy(object):
+  def __init__(self, act_dim):
+    self.act_shape = (act_dim,)
+
+  def execute(self, obs):
+    return np.random.normal(scale=0.16, size=self.act_shape)
+
 class TorchPolicy(object):
-  def __init__(self, pol_params, pol_fn):
+  def __init__(self, act_dim, pol_params, pol_fn):
+    self.act_dim = act_dim
+    self.act_shape = (act_dim,)
     self.pol_params = pol_params
     self.pol_fn = pol_fn
 
@@ -70,135 +95,42 @@ class TorchPolicy(object):
     act = act_var.data.numpy()[0,:]
     return act
 
-class BaxterArmState(object):
-  def __init__(self, limb, jointvel_action_clip):
-    self.limb = limb
-    self.jointvel_action_clip = jointvel_action_clip
-
-    #self.prev_t = None
-    #self.prev_theta = None
-    #self.prev_theta_dot = None
-    self.curr_t = None
-    self.curr_pos = None
-    self.curr_theta = None
-    self.curr_theta_dot = None
-
-  def reset(self):
-    joint_keys = self.limb.joint_names()
-
-    t = rospy.Time.now()
-
-    pos = pos2flat(limb.endpoint_pose()["position"])
-    theta = joint2flat(self.limb.joint_angles(), joint_keys)
-    theta_dot = np.zeros(theta.shape, dtype=theta.dtype)
-
-    #prev_theta = np.array(theta)
-    #prev_theta_dot = np.array(theta_dot)
-    #self.prev_t = t
-    #self.prev_theta = prev_theta
-    #self.prev_theta_dot = prev_theta_dot
-    self.curr_t = t
-    self.curr_pos = pos
-    self.curr_theta = theta
-    self.curr_theta_dot = theta_dot
-
-  def step_up(self, action):
-    joint_keys = self.limb.joint_names()
-
-    if action is not None:
-      assert self.jointvel_action_clip is not None
-      assert self.jointvel_action_clip >= 0.0
-      ctrl_theta_dot = np.clip(action, -self.jointvel_action_clip, self.jointvel_action_clip)
-      self.limb.set_joint_velocities(flat2joint(ctrl_theta_dot, joint_keys))
-
-  def step_down(self):
-    joint_keys = self.limb.joint_names()
-
-    t = rospy.Time.now()
-    delta_t = (t - self.curr_t).to_sec()
-
-    pos = pos2flat(limb.endpoint_pose()["position"])
-    theta = joint2flat(self.limb.joint_angles(), joint_keys)
-    theta_dot = (theta - self.curr_theta) / delta_t
-
-    #self.prev_t = self.curr_t
-    #self.prev_theta = self.curr_theta
-    #self.prev_theta_dot = self.curr_theta_dot
-    self.curr_t = t
-    self.curr_pos = pos
-    self.curr_theta = theta
-    self.curr_theta_dot = theta_dot
-
-class BaxterReachingEnv(object):
-  def __init__(self, state, step_freq):
-    self.state = state
-    self.step_freq = step_freq
-    self.loop_rate = rospy.Rate(2.0 * STEP_FREQ)
-    self.tg_box = None
-
-  def reset(self):
-    # TODO: randomly initialize a target region.
-    self.state.reset()
-    obs = self.get_obs()
-    return obs
-
-  def step(self, action):
-    self.state.step_up(action)
-    self.loop_rate.sleep()
-    self.state.step_down()
-    # TODO: get obs, reward, etc.
-    obs = self.get_obs()
-    res = 0.0
-    done = False
-    return obs, res, done, None
-
-  def sleep(self):
-    self.loop_rate.sleep()
-
-  def get_obs(self):
-    # TODO
-    obs = np.concatenate((self.curr_theta, self.curr_theta_dot, self.curr_pos), axis=0)
-    return obs
-
 def main():
   def sigint_handler(signal, frame):
     # TODO
+    print("DEBUG: got ctrl-C, exiting...")
     sys.exit(0)
   signal.signal(signal.SIGINT, sigint_handler)
 
   rospy.init_node("baxter_policy_driver_node")
   time.sleep(1.0)
 
+  ARM = "right"
+  #ARM = "left"
+
   # Constants.
+  ACTION_DIM = 7
   STEP_FREQ = 20.0   # Hz
-  SAFE_JOINTVEL_ACTION_CLIP = 0.1
-  #SAFE_JOINTVEL_ACTION_CLIP = 0.5
+  SAFE_JOINTVEL_ACTION_CLIP = 0.25
 
-  arm = "right"
-  #arm = "left"
-
-  limb = baxter_interface.Limb(arm)
+  limb = baxter_interface.Limb(ARM)
 
   # TODO: setup the policy.
   policy = DummyPolicy()
+  policy = RandomNormalPolicy(ACTION_DIM)
   #policy = TorchPolicy(...)
 
   # TODO
-  state = BaxterArmState(limb, SAFE_JOINTVEL_ACTION_CLIP)
-  env = BaxterReachingEnv(state, STEP_FREQ)
-
-  # TODO
-  policy = TorchPolicy(None, None)
+  state = BaxterArmState(limb, STEP_FREQ, SAFE_JOINTVEL_ACTION_CLIP)
+  env = BaxterReachingEnv(state)
 
   # TODO: episodic control.
-  obs = env.reset()
-  act = policy.execute(obs)
-  while True:
-    obs, res, done, _ = env.step(act)
-    if done:
-      break
-    act = policy.execute(obs)
-    env.sleep()
+  traj = RealtimeTrajectory()
+  print("DEBUG: starting episode...")
+  traj.rollout(env, policy, horizon=100)
+  print("DEBUG: terminating episode...")
+
+  return
 
   driver = PolicyDriverServer()
   driver.post_transition(None, None, None, None)
