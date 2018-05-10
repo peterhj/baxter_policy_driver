@@ -90,8 +90,9 @@ class Box(object):
     return np.array([xc, yc, zc])
 
 class BaxterReachingEnv(object):
-  def __init__(self, state):
+  def __init__(self, state, horizon=None):
     self.state = state
+    self.horizon = horizon
     self.step_freq = state.step_frequency()
     self.loop_rate = rospy.Rate(2.0 * self.step_freq)
     # TODO: these are specific to the right arm.
@@ -106,12 +107,14 @@ class BaxterReachingEnv(object):
     #self.tg_box = None
     self.tg_box = Box(target_x, target_y, target_z)
 
+    self.k = 0
     self.prev_dist_to_tg = None
 
   def reset(self):
     # TODO: randomly initialize a target region.
     self.state.reset()
     obs = self.get_obs()
+    self.k = 0
     #self.prev_dist_to_tg = None
     #self.prev_dist_to_tg = 0.0
     self.prev_dist_to_tg = np.linalg.norm(self.state.curr_pos - self.tg_box.center())
@@ -124,8 +127,11 @@ class BaxterReachingEnv(object):
     obs = self.get_obs()
     dist_to_tg = np.linalg.norm(self.state.curr_pos - self.tg_box.center())
     res = (self.prev_dist_to_tg - dist_to_tg) * self.step_freq
-    done = dist_to_tg <= 0.05
+    self.k += 1
     self.prev_dist_to_tg = dist_to_tg
+    done = dist_to_tg <= 0.05
+    if self.horizon is not None:
+      done = done or self.k >= self.horizon
     return obs, res, done, None
 
   def sleep(self):

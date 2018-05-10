@@ -5,6 +5,7 @@
 #msgpack_numpy.patch()
 
 from env import *
+from memory import *
 from models import *
 from utils import *
 
@@ -36,46 +37,6 @@ if False:
       # TODO
       print("DEBUG: driver server: post transition")
       pass
-
-class RealtimeTrajectory(object):
-  def __init__(self):
-    self.init_obs = None
-    self.steps = []
-
-  def reset(self):
-    self.init_obs = None
-    del self.steps[:]
-
-  def rollout(self, env, policy, horizon=None):
-    self.reset()
-    obs = env.reset()
-    self.init_obs = obs
-    act = policy.execute(obs)
-    while True:
-      obs, res, done, _ = env.step(act)
-      print("DEBUG: step: pos:", obs[-6:-3], "tg pos:", obs[-3:], "res:", res)
-      self.steps.append((act, res, done, obs))
-      if done:
-        break
-      elif horizon is not None and len(self.steps) >= horizon:
-        break
-      act = policy.execute(obs)
-      env.sleep()
-    env.stop()
-
-  def pack(self):
-    assert len(self.steps) >= 1
-    packed_obs = np.zeros((len(self.steps) + 1, self.init_obs.shape[0]))
-    packed_act = np.zeros((len(self.steps), self.steps[0][0].shape[0]))
-    packed_res = np.zeros(len(self.steps))
-    packed_done = np.zeros(len(self.steps))
-    packed_obs[0,:] = self.init_obs
-    for k in range(len(self.steps)):
-      packed_obs[k+1,:] = self.steps[k][3]
-      packed_act[k,:] = self.steps[k][0]
-      packed_res[k] = self.steps[k][1]
-      packed_done[k] = 1.0 if self.steps[k][2] else 0.0
-    return packed_obs, packed_act, packed_res, packed_done
 
 class DummyPolicy(object):
   def __init__(self):
@@ -147,6 +108,7 @@ def main():
   STEP_FREQ = 20.0   # Hz
   SAFE_ACTION_CLIP = 0.16
   #SAFE_ACTION_CLIP = 0.25
+  SAFE_STEP_HORIZON = 100
 
   # TODO
   limb = baxter_interface.Limb(ARM)
@@ -164,18 +126,27 @@ def main():
   #policy = TorchDeterministicPolicy(ACTION_DIM, pol_params, pol_fn)
   policy = TorchGaussianPolicy(ACTION_DIM, pol_params, pol_fn)
 
-  # TODO: episodic control.
-  traj = RealtimeTrajectory()
-  print("DEBUG: starting episode...")
-  traj.rollout(env, policy, horizon=100)
-  print("DEBUG: terminating episode...")
+  memory = EpisodicReplayMemory(1000)
 
-  p_obs, p_act, p_res, p_done = traj.pack()
-  #print "DEBUG: packed obs:", p_obs
-  #print "DEBUG: packed act:", p_act
-  print np.amax(p_act)
-  print np.amin(p_act)
-  print np.sum(p_res)
+  while True:
+    # TODO: fetch the latest version of the policy params.
+
+    traj = RealtimeTrajectory()
+    print("DEBUG: starting episode {}".format(memory.count()))
+    traj.rollout(env, policy, horizon=SAFE_STEP_HORIZON)
+    #print("DEBUG: terminating episode...")
+
+    p_obs, p_act, p_res, p_done = traj.pack()
+    #print "DEBUG: packed obs:", p_obs
+    #print "DEBUG: packed act:", p_act
+    print np.amax(p_act)
+    print np.amin(p_act)
+    print np.sum(p_res)
+    memory.append_traj(p_obs, p_act, p_res, p_done)
+
+    # TODO: send the current trajectory experience.
+
+    time.sleep(1.0)
 
   return
 
