@@ -30,7 +30,7 @@ class RealtimeTrajectory(object):
       env.sleep()
     env.stop()
 
-  def pack(self):
+  def vectorize(self):
     assert len(self.steps) >= 1
     packed_obs = np.zeros((len(self.steps) + 1, self.init_obs.shape[0]))
     packed_act = np.zeros((len(self.steps), self.steps[0][0].shape[0]))

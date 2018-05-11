@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
-#import msgpack
-#import msgpack_numpy
-#msgpack_numpy.patch()
+import msgpack
+import msgpack_numpy
+msgpack_numpy.patch()
 
 from env import *
 from memory import *
@@ -10,9 +10,8 @@ from models import *
 from utils import *
 
 import baxter_interface
-#from gevent.server import StreamServer
-#from mprpc import RPCServer
 import numpy as np
+from redis import StrictRedis
 import rospy
 import torch
 
@@ -115,7 +114,7 @@ def main():
   state = BaxterArmState(limb, STEP_FREQ, SAFE_ACTION_CLIP)
   env = BaxterReachingEnv(state)
 
-  pol_params, pol_init_fns, pol_fn = build_ddpg_gaussian_policy_fn(20, ACTION_DIM)
+  pol_params, pol_init_fns, pol_fn = build_ddpg_gaussian_policy_fn(env.obs_shape()[0], ACTION_DIM)
   param_sz = flat_count_vars(pol_params)
   print("DEBUG: policy param sz:", param_sz)
   #serialize_vars(pol_params)
@@ -126,25 +125,62 @@ def main():
   #policy = TorchDeterministicPolicy(ACTION_DIM, pol_params, pol_fn)
   policy = TorchGaussianPolicy(ACTION_DIM, pol_params, pol_fn)
 
-  memory = EpisodicReplayMemory(1000)
+  #replay = EpisodicReplayMemory(1000)
+  #client = RPCClient("127.0.0.1", 12345)
+  client = StrictRedis(host="127.0.0.1", port=12345, db=0)
+
+  traj_count = 0
+  last_epoch = None
+
+  assert client.flushdb()
 
   while True:
     # TODO: fetch the latest version of the policy params.
+    if False:
+      while True:
+        msg = client.get("pol_flat_param")
+        if msg is None:
+          time.sleep(0.01)
+          continue
+        pol_flat_param, epoch = msgpack.unpackb(msg)
+        if epoch is not None:
+          if last_epoch is not None and last_epoch >= epoch:
+            time.sleep(0.01)
+            continue
+          last_epoch = epoch
+          break
+      deserialize_vars(pol_params, pol_flat_param)
+    else:
+      while True:
+        msg = client.get("pol_epoch")
+        if msg is None:
+          time.sleep(0.01)
+          continue
+        epoch = msgpack.unpackb(msg)
+        if epoch is not None:
+          if last_epoch is not None and last_epoch >= epoch:
+            time.sleep(0.01)
+            continue
+          last_epoch = epoch
+          break
 
     traj = RealtimeTrajectory()
-    print("DEBUG: starting episode {}".format(memory.count()))
+    print("DEBUG: starting episode {}".format(traj_count))
     traj.rollout(env, policy, horizon=SAFE_STEP_HORIZON)
     #print("DEBUG: terminating episode...")
+    traj_count += 1
 
-    p_obs, p_act, p_res, p_done = traj.pack()
+    p_obs, p_act, p_res, p_done = traj.vectorize()
     #print "DEBUG: packed obs:", p_obs
     #print "DEBUG: packed act:", p_act
-    print np.amax(p_act)
-    print np.amin(p_act)
-    print np.sum(p_res)
-    memory.append_traj(p_obs, p_act, p_res, p_done)
+    #print np.amax(p_act)
+    #print np.amin(p_act)
+    #print np.sum(p_res)
+    #replay.append_traj(p_obs, p_act, p_res, p_done)
 
     # TODO: send the current trajectory experience.
+    msg = msgpack.packb((p_obs, p_act, p_res, p_done, last_epoch))
+    client.set("traj_mem:{}".format(last_epoch), msg)
 
     time.sleep(1.0)
 

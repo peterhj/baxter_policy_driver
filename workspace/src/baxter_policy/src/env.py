@@ -140,6 +140,9 @@ class BaxterReachingEnv(object):
   def stop(self):
     self.state.stop()
 
+  def obs_shape(self):
+    return (20,)
+
   def get_obs(self):
     # TODO
     obs = np.concatenate((self.state.curr_theta, self.state.curr_theta_dot, self.state.curr_pos, self.tg_box.center()), axis=0)
