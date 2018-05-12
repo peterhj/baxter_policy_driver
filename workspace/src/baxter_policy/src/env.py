@@ -181,3 +181,6 @@ class BaxterReachingEnv(object):
     # TODO
     obs = np.concatenate((self.state.curr_theta, self.state.curr_theta_dot, self.state.curr_pos, self.tg_box.center()), axis=0)
     return obs
+
+  def get_distance(self):
+    return np.sqrt(self.prev_dist_to_tg)

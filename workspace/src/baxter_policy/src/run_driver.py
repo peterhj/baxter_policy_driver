@@ -20,23 +20,6 @@ import signal
 import sys
 import time
 
-if False:
-  class PolicyDriverServer(RPCServer):
-    def poll_transition(self):
-      # TODO
-      info = {
-          "obs": None,
-          "res": 0.0,
-          "init": False,
-          "done": False,
-      }
-      pass
-
-    def post_transition(self, obs, res, init, done):
-      # TODO
-      print("DEBUG: driver server: post transition")
-      pass
-
 class DummyPolicy(object):
   def __init__(self):
     pass
@@ -111,6 +94,8 @@ def main():
   SAFE_STEP_HORIZON = 100
 
   # Learning constants.
+  MANUAL_RESET = False
+  #MANUAL_RESET = True
   EVAL_INTERVAL = 10
 
   limb = baxter_interface.Limb(ARM)
@@ -144,22 +129,20 @@ def main():
 
   print("DEBUG: driver: ready")
   while True:
-    # TODO: fetch the latest version of the policy params.
-    if True:
-      while True:
-        #print("DEBUG: driver: waiting for pol flat param...")
-        msg = client.get("pol_flat_param")
-        if msg is None:
+    while True:
+      #print("DEBUG: driver: waiting for pol flat param...")
+      msg = client.get("pol_flat_param")
+      if msg is None:
+        time.sleep(0.5)
+        continue
+      pol_flat_param, epoch = msgpack.unpackb(msg)
+      if epoch is not None:
+        if last_epoch is not None and last_epoch >= epoch:
           time.sleep(0.5)
           continue
-        pol_flat_param, epoch = msgpack.unpackb(msg)
-        if epoch is not None:
-          if last_epoch is not None and last_epoch >= epoch:
-            time.sleep(0.5)
-            continue
-          last_epoch = epoch
-          break
-      deserialize_vars(pol_params, torch.from_numpy(pol_flat_param))
+        last_epoch = epoch
+        break
+    deserialize_vars(pol_params, torch.from_numpy(pol_flat_param))
 
     if False:
       if traj_count > 0 and traj_count % EVAL_INTERVAL == 0:
@@ -168,20 +151,16 @@ def main():
         eval_traj.rollout(env, eval_policy, horizon=SAFE_STEP_HORIZON)
         print("DEBUG: eval:   ret: {} success: {}".format(eval_traj.sum_return(), env.success))
 
+    if MANUAL_RESET:
+      # TODO
+      pass
+
     traj = RealtimeTrajectory()
     traj.rollout(env, policy, horizon=SAFE_STEP_HORIZON)
-    print("DEBUG: train: episode: {} ret: {} success: {}".format(traj_count, traj.sum_return(), env.success))
+    print("DEBUG: train: episode: {} ret: {} distance: {} success: {}".format(traj_count, traj.sum_return(), env.get_distance(), env.success))
     traj_count += 1
 
     p_obs, p_act, p_res, p_done = traj.vectorize()
-    #print "DEBUG: packed obs:", p_obs
-    #print "DEBUG: packed act:", p_act
-    #print np.amax(p_act)
-    #print np.amin(p_act)
-    #print np.sum(p_res)
-    #replay.append_traj(p_obs, p_act, p_res, p_done)
-
-    # TODO: send the current trajectory experience.
     msg = msgpack.packb((p_obs, p_act, p_res, p_done, last_epoch))
     client.set("traj_mem:{}".format(last_epoch), msg)
 
