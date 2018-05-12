@@ -8,10 +8,12 @@ class RealtimeTrajectory(object):
   def __init__(self):
     self.init_obs = None
     self.steps = []
+    self.sum_ret = 0.0
 
   def reset(self):
     self.init_obs = None
     del self.steps[:]
+    self.sum_ret = 0.0
 
   def rollout(self, env, policy, horizon=None):
     self.reset()
@@ -22,6 +24,7 @@ class RealtimeTrajectory(object):
       obs, res, done, _ = env.step(act)
       #print("DEBUG: step: pos:", obs[-6:-3], "tg pos:", obs[-3:], "res:", res, "done:", done)
       self.steps.append((act, res, done, obs))
+      self.sum_ret += res
       if done:
         break
       elif horizon is not None and len(self.steps) >= horizon:
@@ -29,6 +32,9 @@ class RealtimeTrajectory(object):
       act = policy.execute(obs)
       env.sleep()
     env.stop()
+
+  def sum_return(self):
+    return self.sum_ret
 
   def vectorize(self):
     assert len(self.steps) >= 1

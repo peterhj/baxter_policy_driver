@@ -79,6 +79,9 @@ class BaxterArmState(object):
 
 class Box(object):
   def __init__(self, x_bounds, y_bounds, z_bounds):
+    assert x_bounds[0] <= x_bounds[1]
+    assert y_bounds[0] <= y_bounds[1]
+    assert z_bounds[0] <= z_bounds[1]
     self.x_bounds = np.array(x_bounds)
     self.y_bounds = np.array(y_bounds)
     self.z_bounds = np.array(z_bounds)
@@ -89,6 +92,15 @@ class Box(object):
     zc = np.mean(self.z_bounds)
     return np.array([xc, yc, zc])
 
+  def contains(self, p):
+    if p[0] < self.x_bounds[0] or p[0] > self.x_bounds[1]:
+      return False
+    if p[1] < self.y_bounds[0] or p[1] > self.y_bounds[1]:
+      return False
+    if p[2] < self.z_bounds[0] or p[2] > self.z_bounds[1]:
+      return False
+    return True
+
 class BaxterReachingEnv(object):
   def __init__(self, state, horizon=None):
     self.state = state
@@ -96,19 +108,26 @@ class BaxterReachingEnv(object):
     self.step_freq = state.step_frequency()
     self.loop_rate = rospy.Rate(2.0 * self.step_freq)
     # TODO: these are specific to the right arm.
-    valid_x = [0.3, 0.65]
-    valid_y = [-0.75, -0.25]
-    valid_z = [0.25, 0.75]
+    #valid_x = [0.3, 0.65]
+    valid_x = [0.5, 0.9]
+    #valid_y = [-0.75, -0.25]
+    valid_y = [-0.8, 0.0]
+    #valid_z = [0.25, 0.75]
+    valid_z = [0.25, 0.65]
     self.valid_box = Box(valid_x, valid_y, valid_z)
     # TODO: static target box for testing.
-    target_x = [0.425, 0.525]
-    target_y = [-0.55, -0.45]
-    target_z = [0.45, 0.55]
+    #target_x = [0.425, 0.525]
+    target_x = [0.65, 0.75]
+    #target_y = [-0.55, -0.45]
+    target_y = [-0.45, -0.35]
+    #target_z = [0.45, 0.55]
+    target_z = [0.4, 0.5]
     #self.tg_box = None
     self.tg_box = Box(target_x, target_y, target_z)
 
     self.k = 0
     self.prev_dist_to_tg = None
+    self.success = False
 
   def reset(self):
     # TODO: randomly initialize a target region.
@@ -117,7 +136,10 @@ class BaxterReachingEnv(object):
     self.k = 0
     #self.prev_dist_to_tg = None
     #self.prev_dist_to_tg = 0.0
-    self.prev_dist_to_tg = np.linalg.norm(self.state.curr_pos - self.tg_box.center())
+    dx = self.state.curr_pos - self.tg_box.center()
+    #self.prev_dist_to_tg = np.linalg.norm(dx)
+    self.prev_dist_to_tg = dx.dot(dx)
+    self.success = False
     return obs
 
   def step(self, action):
@@ -125,13 +147,25 @@ class BaxterReachingEnv(object):
     self.loop_rate.sleep()
     self.state.step_down()
     obs = self.get_obs()
-    dist_to_tg = np.linalg.norm(self.state.curr_pos - self.tg_box.center())
+    dx = self.state.curr_pos - self.tg_box.center()
+    #dist_to_tg = np.linalg.norm(dx)
+    dist_to_tg = dx.dot(dx)
+    reached = dist_to_tg <= 0.05
+    out_of_bounds = not self.valid_box.contains(self.state.curr_pos)
     res = (self.prev_dist_to_tg - dist_to_tg) * self.step_freq
-    self.k += 1
-    self.prev_dist_to_tg = dist_to_tg
-    done = dist_to_tg <= 0.05
+    res -= 0.1 * action.dot(action)
+    done = reached
     if self.horizon is not None:
       done = done or self.k >= self.horizon
+    if reached:
+      #assert not out_of_bounds
+      res += 100.0
+      self.success = True
+    #elif out_of_bounds:
+    #  res -= 0.1
+    #  #res -= 1.0
+    self.k += 1
+    self.prev_dist_to_tg = dist_to_tg
     return obs, res, done, None
 
   def sleep(self):

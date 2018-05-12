@@ -102,19 +102,25 @@ def main():
   ARM = "right"
   #ARM = "left"
 
-  # Constants.
+  # Robot constants.
   ACTION_DIM = 7
   STEP_FREQ = 20.0   # Hz
-  SAFE_ACTION_CLIP = 0.16
+  #SAFE_ACTION_CLIP = 0.16
+  SAFE_ACTION_CLIP = 0.20
   #SAFE_ACTION_CLIP = 0.25
   SAFE_STEP_HORIZON = 100
 
-  # TODO
+  # Learning constants.
+  EVAL_INTERVAL = 10
+
   limb = baxter_interface.Limb(ARM)
   state = BaxterArmState(limb, STEP_FREQ, SAFE_ACTION_CLIP)
   env = BaxterReachingEnv(state)
 
-  pol_params, pol_init_fns, pol_fn = build_ddpg_gaussian_policy_fn(env.obs_shape()[0], ACTION_DIM)
+  #hidden_dims = [400, 300]
+  hidden_dims = [128, 128]
+
+  pol_params, pol_init_fns, pol_fn = build_ddpg_gaussian_policy_fn(env.obs_shape()[0], ACTION_DIM, hidden_dims)
   param_sz = flat_count_vars(pol_params)
   print("DEBUG: policy param sz:", param_sz)
   #serialize_vars(pol_params)
@@ -125,6 +131,8 @@ def main():
   #policy = TorchDeterministicPolicy(ACTION_DIM, pol_params, pol_fn)
   policy = TorchGaussianPolicy(ACTION_DIM, pol_params, pol_fn)
 
+  #eval_policy = TorchDeterministicPolicy(ACTION_DIM, pol_params, pol_fn)
+
   #replay = EpisodicReplayMemory(1000)
   #client = RPCClient("127.0.0.1", 12345)
   client = StrictRedis(host="127.0.0.1", port=12345, db=0)
@@ -134,40 +142,35 @@ def main():
 
   assert client.flushdb()
 
+  print("DEBUG: driver: ready")
   while True:
     # TODO: fetch the latest version of the policy params.
-    if False:
+    if True:
       while True:
+        #print("DEBUG: driver: waiting for pol flat param...")
         msg = client.get("pol_flat_param")
         if msg is None:
-          time.sleep(0.01)
+          time.sleep(0.5)
           continue
         pol_flat_param, epoch = msgpack.unpackb(msg)
         if epoch is not None:
           if last_epoch is not None and last_epoch >= epoch:
-            time.sleep(0.01)
+            time.sleep(0.5)
             continue
           last_epoch = epoch
           break
-      deserialize_vars(pol_params, pol_flat_param)
-    else:
-      while True:
-        msg = client.get("pol_epoch")
-        if msg is None:
-          time.sleep(0.01)
-          continue
-        epoch = msgpack.unpackb(msg)
-        if epoch is not None:
-          if last_epoch is not None and last_epoch >= epoch:
-            time.sleep(0.01)
-            continue
-          last_epoch = epoch
-          break
+      deserialize_vars(pol_params, torch.from_numpy(pol_flat_param))
+
+    if False:
+      if traj_count > 0 and traj_count % EVAL_INTERVAL == 0:
+        print("DEBUG: eval: episodes: {}".format(traj_count))
+        eval_traj = RealtimeTrajectory()
+        eval_traj.rollout(env, eval_policy, horizon=SAFE_STEP_HORIZON)
+        print("DEBUG: eval:   ret: {} success: {}".format(eval_traj.sum_return(), env.success))
 
     traj = RealtimeTrajectory()
-    print("DEBUG: starting episode {}".format(traj_count))
     traj.rollout(env, policy, horizon=SAFE_STEP_HORIZON)
-    #print("DEBUG: terminating episode...")
+    print("DEBUG: train: episode: {} ret: {} success: {}".format(traj_count, traj.sum_return(), env.success))
     traj_count += 1
 
     p_obs, p_act, p_res, p_done = traj.vectorize()
@@ -182,15 +185,7 @@ def main():
     msg = msgpack.packb((p_obs, p_act, p_res, p_done, last_epoch))
     client.set("traj_mem:{}".format(last_epoch), msg)
 
-    time.sleep(1.0)
-
-  return
-
-  driver = PolicyDriverServer()
-  driver.post_transition(None, None, None, None)
-
-  server = StreamServer(("127.0.0.1", 12345), driver)
-  server.serve_forever()
+    time.sleep(0.5)
 
 if __name__ == "__main__":
   main()
